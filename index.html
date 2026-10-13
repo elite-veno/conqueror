@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conqueror</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="map"></canvas>
+
+  <header id="topbar" class="hidden">
+    <div class="nation"><span id="tb-swatch" class="sw big"></span>
+      <div><div id="tb-title"></div><div id="tb-sub"></div></div></div>
+    <div class="stat" title="Goud — voor troepen, gebouwen en technologie"><span class="ic gold">●</span><b id="tb-gold"></b><small id="tb-goldrate"></small></div>
+    <div class="stat" title="Bestuurspunten — voor regeringsvormen"><span class="ic gp">◆</span><b id="tb-gp"></b><small id="tb-gprate"></small></div>
+    <div class="stat" title="Gebieden (doel om te winnen)"><span class="ic">⬢</span><b id="tb-tiles"></b><small id="tb-tilegoal"></small></div>
+    <div class="stat" title="Totaal aantal troepen"><span class="ic">⚔</span><b id="tb-troops"></b></div>
+    <div id="speed">
+      <button data-speed="pause" title="Pauze (spatie)">❚❚</button>
+      <button data-speed="1">1×</button><button data-speed="2">2×</button><button data-speed="3">3×</button>
+    </div>
+    <div id="tb-time"></div>
+  </header>
+
+  <aside id="side" class="hidden">
+    <nav id="tabs">
+      <button data-tab="tile" class="on">Gebied</button>
+      <button data-tab="tech">Technologie</button>
+      <button data-tab="gov">Regering</button>
+      <button data-tab="rank">Ranglijst</button>
+    </nav>
+    <div id="panel"></div>
+  </aside>
+
+  <div id="log" class="hidden"></div>
+  <div id="tooltip" class="hidden"></div>
+  <div id="flash" class="hidden"></div>
+
+  <section id="start">
+    <div class="card">
+      <h1>Conqueror</h1>
+      <p class="lead">Kies een historisch volk, bouw fabrieken, onderzoek nieuwe troepen en regeringsvormen, en groei uit tot een wereldrijk.</p>
+      <div id="nation-list"></div>
+      <div class="start-row">
+        <div id="chosen"><small class="muted">Kies een land in de lijst of op de kaart</small></div>
+        <button id="random-btn" class="ghost">Willekeurig</button>
+      </div>
+      <div class="start-row">
+        <div class="diff">
+          <label><input type="radio" name="diff" value="easy"> Makkelijk</label>
+          <label><input type="radio" name="diff" value="normal" checked> Normaal</label>
+          <label><input type="radio" name="diff" value="hard"> Moeilijk</label>
+        </div>
+        <button id="start-btn" disabled>Start veldtocht</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="end" class="hidden">
+    <div class="card">
+      <h1 id="end-title"></h1>
+      <p id="end-text"></p>
+      <button onclick="location.reload()">Opnieuw spelen</button>
+    </div>
+  </section>
+
+  <script src="js/mapdata.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
