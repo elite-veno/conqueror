@@ -1,6 +1,8 @@
 // Computer-controlled nations. Every nation follows the same rules and tech tree as the player.
 'use strict';
 
+const AI_SPECIAL_COOLDOWN = 25;   // seconds between ships/aircraft built by one AI nation
+
 const AI = {
   update(dt) {
     for (const n of Game.nations) {
@@ -25,6 +27,185 @@ const AI = {
     this.recruit(n, border.length ? border : mine);
     this.attack(n, border);
     this.consolidate(n, mine, border);
+    const mySpecials = G.units.filter(u => u.owner === n.idx);
+    this.navy(n, mine, mySpecials);
+    this.airforce(n, mine, border, mySpecials);
+    this.defenses(n, mine);
+  },
+
+  // ---------- navy ----------
+  navy(n, mine, mySpecials) {
+    const G = Game;
+    if (!n.mil.naval1) return;
+    const coastal = mine.filter(t => World.tiles[t.id].seaAdj.length);
+    if (!coastal.length) return;
+    const res = this.reserve(n);
+    if (n.built.harbor < 1 + Math.floor(mine.length / 40) && n.gold > G.buildCost(n, 'harbor') + res + 30) {
+      const spot = coastal.filter(t => !t.harbor).sort((a, b) => G.total(b.units) - G.total(a.units))[0];
+      if (spot) G.build(n.idx, spot.id, 'harbor');
+    }
+    const harbors = coastal.filter(t => t.harbor);
+    const count = type => mySpecials.filter(u => u.type === type).length;
+    if (harbors.length && G.time >= (n.ai.navyAt || 0)) {
+      const before = G.units.length;
+      const h = harbors[Math.floor(Math.random() * harbors.length)];
+      // Build one of the ship types that is below its target count.
+      const want = [
+        ['transport', 1 + Math.floor(mine.length / 30)],
+        ['destroyer', 1 + Math.floor(mine.length / 25)],
+        ['battleship', Math.floor(mine.length / 35)],
+      ].filter(([type, max]) => n.mil[SPECIALS[type].tech] && count(type) < max && n.gold > SPECIALS[type].cost + res + 40);
+      if (want.length) G.buildSpecial(n.idx, h.id, want[Math.floor(Math.random() * want.length)][0]);
+      if (G.units.length > before) n.ai.navyAt = G.time + AI_SPECIAL_COOLDOWN;
+    }
+    for (const u of mySpecials) {
+      if (u.path || (u.mission && u.mission.kind === 'hunt')) continue;
+      if (u.type === 'transport') this.useTransport(n, u);
+      else if (u.type === 'destroyer') this.useDestroyer(n, u);
+      else if (u.type === 'battleship') this.useBattleship(n, u);
+    }
+  },
+
+  // Load at an own coast, then sail to a weak foreign coast and land.
+  useTransport(n, u) {
+    const G = Game;
+    const here = World.sea[u.sea];
+    if (!G.total(u.cargo)) {
+      const src = here.coast.map(id => G.tiles[id])
+        .filter(t => t.owner === n.idx && G.total(t.units) >= 10)
+        .sort((a, b) => G.total(b.units) - G.total(a.units))[0];
+      if (src) { G.loadUnit(n.idx, u.id, src.id, 0.7); return; }
+      const best = G.tiles.filter(t => t.owner === n.idx && G.total(t.units) >= 15 && World.tiles[t.id].seaAdj.length)
+        .sort((a, b) => G.total(b.units) - G.total(a.units)).slice(0, 3);
+      for (const t of best) if (G.orderShip(u, { tile: t.id, act: 'move' })) return;
+      return;
+    }
+    const aggro = DIFFICULTY[G.difficulty].aiAggro;
+    const memo = new Map();
+    const good = id => {
+      if (!memo.has(id)) {
+        const t = G.tiles[id];
+        memo.set(id, t.owner !== n.idx && G.canAttack(n.idx, id)
+          && G.odds(n.idx, u.cargo, t, -AMPHIBIOUS_PENALTY) >= (t.owner < 0 ? 1.2 : aggro));
+      }
+      return memo.get(id);
+    };
+    const path = World.seaPath(u.sea, sid => World.sea[sid].coast.some(good), 60);
+    if (path) {
+      const target = World.sea[path[path.length - 1]].coast.find(good);
+      G.orderShip(u, { tile: target, act: 'unload' });
+      u.aiWait = 0;
+      return;
+    }
+    // Nothing worth invading: give the troops back after a while.
+    u.aiWait = (u.aiWait || 0) + 1;
+    if (u.aiWait > 10) {
+      const home = here.coast.find(id => G.tiles[id].owner === n.idx);
+      if (home !== undefined) G.unload(u, home);
+      u.aiWait = 0;
+    }
+  },
+
+  useDestroyer(n, u) {
+    const G = Game;
+    const enemyCells = new Map();
+    for (const e of G.units) if (e.owner !== n.idx && G.isSea(e)) enemyCells.set(e.sea, e);
+    if (!enemyCells.size || G.atPeace()) return;
+    const path = World.seaPath(u.sea, sid => enemyCells.has(sid), 25);
+    if (path) G.orderShip(u, { unit: enemyCells.get(path[path.length - 1]).id });
+  },
+
+  useBattleship(n, u) {
+    const G = Game;
+    if (G.atPeace()) return;
+    const target = sid => World.sea[sid].coast.some(id => {
+      const t = G.tiles[id];
+      return t.owner >= 0 && t.owner !== n.idx && G.total(t.units) >= 8;
+    });
+    if (target(u.sea)) return;
+    const path = World.seaPath(u.sea, target, 30);
+    if (path) G.orderShip(u, { sea: path[path.length - 1] });
+  },
+
+  // ---------- air force ----------
+  airforce(n, mine, border, mySpecials) {
+    const G = Game;
+    if (!n.mil.air1) return;
+    const res = this.reserve(n);
+    if (n.built.airfield < 1 + Math.floor(mine.length / 60) && n.gold > G.buildCost(n, 'airfield') + res + 50) {
+      const interior = mine.filter(t => !t.airfield && !border.includes(t));
+      const pool = interior.length ? interior : mine.filter(t => !t.airfield);
+      if (pool.length) G.build(n.idx, pool[Math.floor(Math.random() * pool.length)].id, 'airfield');
+    }
+    const fields = mine.filter(t => t.airfield);
+    const count = type => mySpecials.filter(u => u.type === type).length;
+    if (fields.length && G.time >= (n.ai.airAt || 0)) {
+      const f = fields[Math.floor(Math.random() * fields.length)];
+      const before = G.units.length;
+      if (n.mil.air2 && count('bomber') < 1 + Math.floor(mine.length / 30) && n.gold > SPECIALS.bomber.cost + res + 40) G.buildSpecial(n.idx, f.id, 'bomber');
+      else if (count('helicopter') < 1 + Math.floor(mine.length / 50) && n.gold > SPECIALS.helicopter.cost + res + 40) G.buildSpecial(n.idx, f.id, 'helicopter');
+      if (G.units.length > before) n.ai.airAt = G.time + AI_SPECIAL_COOLDOWN;
+    }
+    for (const u of mySpecials) {
+      if (u.dest || G.isSea(u)) continue;
+      if (u.type === 'bomber') this.useBomber(n, u);
+      else if (u.type === 'helicopter') this.useHelicopter(n, u, border);
+    }
+  },
+
+  // Tiles within `range` cells of a point, filtered.
+  tilesNear(x, y, range, filter) {
+    const [c, r] = World.pickCR(x, y);
+    return Game.tiles.filter(t => {
+      const w = World.tiles[t.id];
+      return Math.abs(w.r - r) <= range && World.cellDist(c, r, w.c, w.r) <= range && filter(t);
+    });
+  },
+
+  useBomber(n, u) {
+    const G = Game;
+    if (!u.armed || G.atPeace()) return;
+    const targets = this.tilesNear(u.x, u.y, 10, t => t.owner >= 0 && t.owner !== n.idx && G.total(t.units) >= 6);
+    if (!targets.length) return;
+    const t = targets.reduce((a, b) => G.total(b.units) > G.total(a.units) ? b : a);
+    G.orderAir(u, { tile: t.id });
+  },
+
+  useHelicopter(n, u, border) {
+    const G = Game;
+    const here = World.pick(u.x, u.y);
+    if (!G.total(u.cargo)) {
+      if (here >= 0 && G.tiles[here].owner === n.idx && G.total(G.tiles[here].units) >= 8) { G.loadUnit(n.idx, u.id, here, 0.6); return; }
+      const src = border.filter(t => G.total(t.units) >= 12).sort((a, b) => G.total(b.units) - G.total(a.units))[0];
+      if (src && src.id !== here) G.orderAir(u, { tile: src.id, act: 'move' });
+      return;
+    }
+    const aggro = DIFFICULTY[G.difficulty].aiAggro;
+    const targets = this.tilesNear(u.x, u.y, 8, t => t.owner !== n.idx && G.canAttack(n.idx, t.id)
+      && G.odds(n.idx, u.cargo, t) >= (t.owner < 0 ? 1.2 : aggro));
+    if (targets.length) {
+      const score = t => (t.factory ? 1 : 0) + (t.owner >= 0 && G.nations[t.owner].capital === t.id ? 2 : 0);
+      const t = targets.reduce((a, b) => score(b) > score(a) ? b : a);
+      G.orderAir(u, { tile: t.id, act: 'unload' });
+    } else if (here >= 0 && G.tiles[here].owner === n.idx) {
+      G.unload(u, here);
+    }
+  },
+
+  // Coastal batteries and anti-air where enemy ships/aircraft show up.
+  defenses(n, mine) {
+    const G = Game;
+    if (!n.mil.naval2 && !n.mil.air1) return;
+    const res = this.reserve(n);
+    for (const e of G.units) {
+      if (e.owner === n.idx) continue;
+      const sea = G.isSea(e);
+      const kind = sea ? 'coastal' : 'flak';
+      if ((sea && !n.mil.naval2) || (!sea && !n.mil.air1)) continue;
+      if (n.built[kind] >= 2 + Math.floor(mine.length / 20) || n.gold < G.buildCost(n, kind) + res + 60) continue;
+      const near = this.tilesNear(e.x, e.y, 2, t => t.owner === n.idx && !t[kind] && (!sea || World.tiles[t.id].seaAdj.length));
+      if (near.length) { G.build(n.idx, near[0].id, kind); return; }
+    }
   },
 
   research(n) {

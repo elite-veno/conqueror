@@ -100,8 +100,8 @@ const SPECIALS = {
 const SPECIAL_ERA_SCALE = 0.2;   // +20% hp/damage per era
 const AMPHIBIOUS_PENALTY = 0.2;  // attack malus when landing from a ship
 const DEFENSES = {               // buildings that shoot at units in range
-  coastal: { vs: 'sea', dps: 12, range: 2 },
-  flak:    { vs: 'air', dps: 20, range: 2 },
+  coastal: { vs: 'sea', dps: 6, range: 2 },
+  flak:    { vs: 'air', dps: 14, range: 2 },
 };
 
 // Final node of the tech tree.

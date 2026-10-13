@@ -40,7 +40,27 @@
   <section id="start">
     <div class="card">
       <h1>Conqueror</h1>
-      <p class="lead">Kies een historisch volk, bouw fabrieken, onderzoek nieuwe troepen en regeringsvormen, en groei uit tot een wereldrijk.</p>
+      <p class="lead">Kies een historisch volk, bouw fabrieken, vloten en luchtmachten, onderzoek nieuwe troepen en regeringsvormen, en groei uit tot een wereldrijk.</p>
+      <div id="mode" class="seg">
+        <button data-mode="solo" class="on">Alleen spelen</button>
+        <button data-mode="mp">Multiplayer</button>
+      </div>
+      <div id="mp-box" class="hidden">
+        <p id="mp-offline" class="muted small hidden">Multiplayer werkt via de server: start <code>python3 server.py</code>
+          in de spelmap en open <b>http://localhost:8000</b>. Vrienden in je netwerk gebruiken het adres dat de server toont.</p>
+        <div id="mp-connect">
+          <div class="mp-row"><input id="mp-name" maxlength="16" placeholder="Je naam"></div>
+          <div class="mp-row">
+            <button id="mp-create">Nieuwe kamer</button><span class="muted small">of</span>
+            <input id="mp-code" maxlength="4" placeholder="CODE"><button id="mp-join">Meedoen</button>
+          </div>
+        </div>
+        <div id="mp-lobby" class="hidden">
+          <div class="room">Kamercode <b id="mp-roomcode"></b><small>Deel deze code met je medespelers</small></div>
+          <ul id="mp-players"></ul>
+        </div>
+        <p id="mp-msg" class="small"></p>
+      </div>
       <div id="nation-list"></div>
       <div class="start-row">
         <div id="chosen"><small class="muted">Kies een land in de lijst of op de kaart</small></div>
@@ -61,7 +81,10 @@
     <div class="card">
       <h1 id="end-title"></h1>
       <p id="end-text"></p>
-      <button onclick="location.reload()">Opnieuw spelen</button>
+      <div class="end-buttons">
+        <button id="end-close" class="ghost hidden">Verder kijken</button>
+        <button onclick="location.href = location.pathname">Opnieuw spelen</button>
+      </div>
     </div>
   </section>
 
@@ -70,6 +93,7 @@
   <script src="js/world.js"></script>
   <script src="js/game.js"></script>
   <script src="js/ai.js"></script>
+  <script src="js/net.js"></script>
   <script src="js/render.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/main.js"></script>

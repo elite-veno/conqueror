@@ -9,6 +9,8 @@ const Render = {
   cache: null,
   hexPath: null,       // all hexes, for grid lines
   hover: -1,
+  hoverSea: -1,        // sea cell under the cursor while a ship/aircraft is selected
+  unitScreen: new Map(),
   selected: -1,
   preview: null,       // path preview tile ids
 
@@ -183,12 +185,36 @@ const Render = {
       ctx.setLineDash([]);
     }
     if (this.hover >= 0) hl(this.hover, 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0.6)', 1.5);
-    if (this.selected >= 0) hl(this.selected, 'rgba(255,230,120,0.25)', '#ffe27a', 2.5);
+    if (this.hoverSea >= 0) {
+      const s = World.sea[this.hoverSea];
+      const p = new Path2D(); this.addHex(p, s.x, s.y, HEX * 0.92);
+      ctx.strokeStyle = 'rgba(160,220,255,0.8)'; ctx.lineWidth = 1.5 / z; ctx.stroke(p);
+    }
+    if (this.selected >= 0) {
+      hl(this.selected, 'rgba(255,230,120,0.25)', '#ffe27a', 2.5);
+      const t = Game.tiles[this.selected];
+      for (const key of ['coastal', 'flak']) if (t[key]) this.rangeRing(World.tiles[t.id], DEFENSES[key].range);
+    }
 
     // Effects
     for (const e of Game.effects) {
+      if (e.kind === 'shot') {
+        const k = e.t / 0.35;
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y); ctx.lineTo(e.x2, e.y2);
+        ctx.strokeStyle = `rgba(255,240,170,${0.9 * (1 - k)})`;
+        ctx.lineWidth = 1.6 / z;
+        ctx.stroke();
+        continue;
+      }
       const k = e.t / 1.2;
       ctx.beginPath();
+      if (e.kind === 'boom') {
+        ctx.arc(e.x, e.y, HEX * (0.3 + k * 0.9), 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,${Math.round(170 - 120 * k)},40,${0.75 * (1 - k)})`;
+        ctx.fill();
+        continue;
+      }
       ctx.arc(e.x, e.y, HEX * (0.4 + k * 1.4), 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(255,${Math.round(200 - 150 * k)},80,${1 - k})`;
       ctx.lineWidth = 2.5 / z;
@@ -198,7 +224,20 @@ const Render = {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.drawTileOverlays();
     this.drawArmies();
+    this.drawUnits();
     this.drawLabels();
+  },
+
+  // Dashed circle showing a weapon range (in cells) around a world point; called in world space.
+  rangeRing(p, range) {
+    const { ctx } = this, z = this.cam.zoom;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, (range + 0.5) * HEX_W, 0, Math.PI * 2);
+    ctx.setLineDash([5 / z, 4 / z]);
+    ctx.strokeStyle = 'rgba(255,120,90,0.7)';
+    ctx.lineWidth = 1.5 / z;
+    ctx.stroke();
+    ctx.setLineDash([]);
   },
 
   visible(x, y, m = 40) { return x > -m && y > -m && x < this.w + m && y < this.h + m; },
@@ -228,7 +267,8 @@ const Render = {
         ctx.fillText(fmt(total), s.x, s.y + (n && n.capital === t.id ? px * 0.05 : 0));
       }
       if (px >= 16) {
-        const icons = (t.factory ? BUILDINGS.factory.icon : '') + (t.fort ? BUILDINGS.fort.icon : '') + (t.temple ? BUILDINGS.temple.icon : '');
+        let icons = '';
+        for (const k of BUILD_KEYS) if (t[k]) icons += BUILDINGS[k].icon;
         if (icons) {
           ctx.font = `${Math.round(px * 0.36)}px system-ui, sans-serif`;
           ctx.fillStyle = 'rgba(255,255,255,0.9)';
@@ -284,6 +324,144 @@ const Render = {
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText(fmt(Game.total(a.units)), s.x, s.y + 0.5);
       }
+    }
+  },
+
+  unitRadius() { return Math.max(6, Math.min(14, HEX * this.cam.zoom * 0.5)); },
+
+  // Ship or aircraft under a screen point (uses the spread-out positions of the last frame).
+  unitAt(sx, sy) {
+    const r = this.unitRadius() + 4;
+    let best = null, bd = r * r;
+    for (const u of Game.units) {
+      const s = this.unitScreen.get(u.id) || this.toScreen(u.x, u.y);
+      const d = (s.x - sx) ** 2 + (s.y - sy) ** 2;
+      if (d < bd) { bd = d; best = u; }
+    }
+    return best;
+  },
+
+  // Screen positions for units; units sharing a spot are fanned out around it.
+  layoutUnits(r) {
+    const groups = new Map();
+    for (const u of Game.units) {
+      const key = Math.round(u.x / 3) + ',' + Math.round(u.y / 3);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(u);
+    }
+    this.unitScreen = new Map();
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.id - b.id);
+      list.forEach((u, i) => {
+        const s = this.toScreen(u.x, u.y);
+        if (list.length > 1) {
+          const a = i / list.length * Math.PI * 2 - Math.PI / 2;
+          s.x += Math.cos(a) * r * 1.1; s.y += Math.sin(a) * r * 1.1;
+        }
+        this.unitScreen.set(u.id, s);
+      });
+    }
+  },
+
+  unitRoute(u) {
+    if (u.dest) return [u.dest];
+    if (!u.path) return [];
+    return u.path.slice(u.seg + 1).map(id => World.sea[id]);
+  },
+
+  drawUnits() {
+    const { ctx } = this;
+    const r = this.unitRadius();
+    this.layoutUnits(r);
+    for (const u of Game.units) {
+      const s = this.unitScreen.get(u.id);
+      if (!this.visible(s.x, s.y)) continue;
+      const mine = u.owner === Game.player;
+      const route = this.unitRoute(u);
+      if (mine && route.length) {
+        ctx.strokeStyle = 'rgba(160,220,255,0.65)';
+        ctx.setLineDash([4, 4]); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(s.x, s.y);
+        for (const p of route) { const q = this.toScreen(p.x, p.y); ctx.lineTo(q.x, q.y); }
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      if (u.id === UI.selUnit) {
+        ctx.beginPath(); ctx.arc(s.x, s.y, r + 5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,226,122,0.25)'; ctx.fill();
+        ctx.strokeStyle = '#ffe27a'; ctx.lineWidth = 2; ctx.stroke();
+        const range = SPECIALS[u.type].range;
+        if (range) {
+          ctx.save();
+          const z = this.cam.zoom, tx = this.w / 2 - this.cam.x * z, ty = this.h / 2 - this.cam.y * z;
+          ctx.setTransform(z * this.dpr, 0, 0, z * this.dpr, tx * this.dpr, ty * this.dpr);
+          this.rangeRing(u, range);
+          ctx.restore();
+        }
+      }
+      const next = route[0];
+      if (next && Math.abs(next.x - u.x) > 0.5) u.flip = next.x < u.x;
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      if (u.flip) ctx.scale(-1, 1);
+      this.unitShape(u.type, r, Game.nations[u.owner].color, mine);
+      ctx.restore();
+      if (u.hp < u.maxHp - 0.5) {
+        const w = r * 2, f = Math.max(0, u.hp / u.maxHp);
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(s.x - r, s.y - r - 7, w, 4);
+        ctx.fillStyle = f > 0.5 ? '#7fd18b' : f > 0.25 ? '#e8c066' : '#ef7a6a';
+        ctx.fillRect(s.x - r, s.y - r - 7, w * f, 4);
+      }
+      const cargo = Game.total(u.cargo);
+      if (cargo || (u.type === 'bomber' && !u.armed)) {
+        const text = cargo ? fmt(cargo) : '⟳';
+        ctx.font = `700 ${Math.round(Math.max(10, r * 0.8))}px system-ui, sans-serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.strokeText(text, s.x + r, s.y - r * 0.8);
+        ctx.fillStyle = '#fff'; ctx.fillText(text, s.x + r, s.y - r * 0.8);
+      }
+    }
+  },
+
+  // Unit silhouettes, drawn around (0,0) facing right.
+  unitShape(type, r, color, mine) {
+    const { ctx } = this;
+    ctx.beginPath();
+    if (type === 'transport') {
+      ctx.moveTo(-r, -r * 0.1); ctx.lineTo(r * 0.75, -r * 0.1);
+      ctx.quadraticCurveTo(r * 1.15, 0, r * 0.75, r * 0.45); ctx.lineTo(-r * 0.85, r * 0.45); ctx.closePath();
+      ctx.rect(-r * 0.55, -r * 0.6, r * 0.8, r * 0.5);
+    } else if (type === 'destroyer') {
+      ctx.moveTo(-r * 1.05, -r * 0.2); ctx.lineTo(r * 0.55, -r * 0.2); ctx.lineTo(r * 1.25, r * 0.05);
+      ctx.lineTo(r * 0.55, r * 0.35); ctx.lineTo(-r * 0.95, r * 0.35); ctx.closePath();
+      ctx.rect(-r * 0.35, -r * 0.55, r * 0.5, r * 0.35);
+    } else if (type === 'battleship') {
+      const R = r * 1.2;
+      ctx.moveTo(-R, -R * 0.2); ctx.lineTo(R * 0.6, -R * 0.2); ctx.lineTo(R * 1.15, R * 0.05);
+      ctx.lineTo(R * 0.6, R * 0.38); ctx.lineTo(-R * 0.95, R * 0.38); ctx.closePath();
+      ctx.rect(-R * 0.55, -R * 0.55, R * 0.35, R * 0.35);
+      ctx.rect(R * 0.05, -R * 0.55, R * 0.35, R * 0.35);
+    } else if (type === 'helicopter') {
+      ctx.ellipse(0, 0, r * 0.7, r * 0.42, 0, 0, Math.PI * 2);
+      ctx.moveTo(-r * 0.6, -r * 0.08); ctx.lineTo(-r * 1.3, -r * 0.2); ctx.lineTo(-r * 1.3, r * 0.1); ctx.lineTo(-r * 0.6, r * 0.12);
+    } else {
+      ctx.moveTo(r * 1.1, 0); ctx.lineTo(r * 0.2, -r * 0.18); ctx.lineTo(-r * 0.2, -r * 1.05); ctx.lineTo(-r * 0.5, -r * 1.05);
+      ctx.lineTo(-r * 0.35, -r * 0.18); ctx.lineTo(-r * 0.95, -r * 0.18); ctx.lineTo(-r * 1.15, -r * 0.55); ctx.lineTo(-r * 1.25, -r * 0.55);
+      ctx.lineTo(-r * 1.15, 0); ctx.lineTo(-r * 1.25, r * 0.55); ctx.lineTo(-r * 1.15, r * 0.55); ctx.lineTo(-r * 0.95, r * 0.18);
+      ctx.lineTo(-r * 0.35, r * 0.18); ctx.lineTo(-r * 0.5, r * 1.05); ctx.lineTo(-r * 0.2, r * 1.05); ctx.lineTo(r * 0.2, r * 0.18);
+      ctx.closePath();
+    }
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = mine ? 2 : 1.2;
+    ctx.strokeStyle = mine ? '#ffe27a' : 'rgba(0,0,0,0.85)';
+    ctx.stroke();
+    if (type === 'helicopter') {
+      const a = performance.now() / 60;
+      ctx.beginPath();
+      ctx.moveTo(-Math.cos(a) * r * 1.1, -Math.sin(a) * r * 0.35 - r * 0.45);
+      ctx.lineTo(Math.cos(a) * r * 1.1, Math.sin(a) * r * 0.35 - r * 0.45);
+      ctx.strokeStyle = 'rgba(20,20,20,0.85)'; ctx.lineWidth = 1.5; ctx.stroke();
     }
   },
 

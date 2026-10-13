@@ -100,8 +100,8 @@ const World = {
   },
 
   cellDist(c1, r1, c2, r2) {
-    const A = this.cube(c1, r1), B = this.cube(c2, r2);
-    return Math.max(Math.abs(A[0] - B[0]), Math.abs(A[1] - B[1]), Math.abs(A[2] - B[2]));
+    const dq = c1 - (r1 - (r1 & 1)) / 2 - (c2 - (r2 - (r2 & 1)) / 2), dr = r1 - r2;
+    return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(dq + dr));
   },
 
   center(c, r) {
